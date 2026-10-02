@@ -23,16 +23,23 @@
 
 // Screen playback: preserve table progress across DOM replacements on data refresh.
 (()=>{
- const positions=new Map();let paused=false,holdUntil=Date.now()+7000,last=performance.now(),pageY=0,lastPage='';
+ const positions=new Map();let paused=false,holdUntil=Date.now()+7000,last=performance.now(),lastPage='';
  const params=new URLSearchParams(location.search);if(params.get('panel')==='1')document.body.classList.add('cms-panel');
  const control=document.createElement('button');control.className='playback-toggle';control.textContent='Pause auto-scroll';control.onclick=()=>{paused=!paused;control.textContent=paused?'Resume auto-scroll':'Pause auto-scroll';};document.body.append(control);
  const clock=document.createElement('time');clock.className='screen-clock';document.body.append(clock);
  setInterval(()=>clock.textContent=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Dubai',day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date())+' GST',1000);
- for(const name of ['wheel','touchstart','keydown'])window.addEventListener(name,()=>{holdUntil=Date.now()+20000;pageY=scrollY;},{passive:true});
+ for(const name of ['wheel','touchstart','keydown'])window.addEventListener(name,()=>{holdUntil=Date.now()+20000;},{passive:true});
  function step(time){const dt=Math.min(100,time-last)/1000;last=time;requestAnimationFrame(step);if(document.hidden||paused||document.querySelector('dialog[open]')||document.activeElement?.matches('input,select,textarea')||Date.now()<holdUntil)return;
- const page=document.querySelector('main')?.dataset.page;if(!page)return;if(page!==lastPage){lastPage=page;pageY=0;window.scrollTo(0,0);holdUntil=Date.now()+6000;}
- const tables=[...document.querySelectorAll('.live-table')];let reading=false;
- for(const [i,el] of tables.entries()){const key=page+':'+(el.closest('.panel')?.querySelector('h2')?.textContent||i);let state=positions.get(key);if(!state){state={y:0,done:false,end:0};positions.set(key,state);}const max=el.scrollHeight-el.clientHeight;if(max<2)continue;el.scrollTop=Math.min(state.y,max);const rect=el.getBoundingClientRect();if(rect.top>=30&&rect.bottom<=innerHeight-25&&!state.done){reading=true;state.y=Math.min(max,state.y+14*dt);el.scrollTop=state.y;if(state.y>=max){if(!state.end)state.end=Date.now()+5000;if(Date.now()>=state.end)state.done=true;}break;}}
- if(reading)return;const maxPage=document.documentElement.scrollHeight-innerHeight;if(maxPage<2)return;pageY=Math.min(maxPage,Math.max(pageY,scrollY)+16*dt);window.scrollTo(0,pageY);if(pageY>=maxPage-1){holdUntil=Date.now()+7000;pageY=0;positions.clear();window.scrollTo(0,0);}
+ const page=document.querySelector('main')?.dataset.page;if(!page)return;if(page!==lastPage){lastPage=page;holdUntil=Date.now()+6000;}
+ const tables=[...document.querySelectorAll('.live-table')];
+ for(const [i,el] of tables.entries()){
+  const key=page+':'+(el.closest('.panel')?.querySelector('h2')?.textContent||i);let state=positions.get(key);
+  if(!state){state={y:0,pauseUntil:Date.now()+5000};positions.set(key,state);}
+  const max=el.scrollHeight-el.clientHeight;if(max<2)continue;
+  if(state.atEnd){el.scrollTop=max;if(Date.now()>=state.pauseUntil){state.atEnd=false;state.y=0;el.scrollTop=0;state.pauseUntil=Date.now()+4000;}continue;}
+  el.scrollTop=Math.min(state.y,max);const rect=el.getBoundingClientRect();if(rect.bottom<=0||rect.top>=innerHeight||Date.now()<state.pauseUntil)continue;
+  state.y=Math.min(max,state.y+14*dt);el.scrollTop=state.y;
+  if(state.y>=max){state.y=0;state.pauseUntil=Date.now()+6000;state.atEnd=true;}
+ }
  }requestAnimationFrame(step);
 })();
