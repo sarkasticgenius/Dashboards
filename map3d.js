@@ -27,7 +27,16 @@ window.HMMap3D={mount({points,view,container,token}){
  const fly=index=>{const group=sites[index];if(!group)return;map.flyTo({center:[group[0].lng,group[0].lat],zoom:17,pitch:60,duration:window.matchMedia('(prefers-reduced-motion: reduce)').matches?0:1600});describe(group);};
  const list=()=>{selectedKey=null;details.replaceChildren();const q=search.value.toLowerCase().trim();const matches=sites.map((group,index)=>({group,index})).filter(x=>x.group.some(p=>((p.venue||'')+' '+(p.name||'')).toLowerCase().includes(q)));const info=document.createElement('p');info.textContent=matches.length+' locations · Select a venue to locate its screens';details.append(info);matches.slice(0,40).forEach(({group,index})=>details.append(makeButton((group[0].venue||group[0].name||'Unnamed location')+' · '+group.length+' screens',()=>{stop();fly(index);})));if(matches.length>40){const more=document.createElement('p');more.textContent='Search to narrow the locations shown.';details.append(more);}};
  search.oninput=()=>{stop();list();};tilt.onclick=()=>map.easeTo({pitch:map.getPitch()>10?0:60,duration:600});
- const startTour=()=>{if(!sites.length)return;const unique=new Map();sites.forEach((g,i)=>{const venue=g[0].venue||g[0].name||String(i);if(!unique.has(venue))unique.set(venue,i);});const stops=[...unique.values()];tour.textContent='Pause venue tour';const next=()=>fly(stops[current++%stops.length]);next();timer=setInterval(next,10000);};
+ const startTour=()=>{
+  if(!sites.length)return;stop();tour.textContent='Pause venue tour';
+  const unique=new Map();sites.forEach((g,i)=>{const venue=g[0].venue||g[0].name||String(i);if(!unique.has(venue))unique.set(venue,i);});const stops=[...unique.values()];let visits=0;
+  const overview=()=>{
+   const bounds=new mapboxgl.LngLatBounds([51.5,22.5],[56.5,26.2]);points.forEach(p=>bounds.extend([p.lng,p.lat]));
+   map.fitBounds(bounds,{padding:55,maxZoom:8,pitch:25,bearing:0,duration:2200});selectedKey=null;details.replaceChildren();const h=document.createElement('h3');h.textContent='United Arab Emirates · Network overview';const summary=document.createElement('p');summary.textContent=points.length+' mapped screens · '+points.filter(p=>p.state==='online').length+' online · '+points.filter(p=>p.state==='offline').length+' offline · Overview for 30 seconds, then venue close-ups';details.append(h,summary);visits=0;timer=setTimeout(venue,30000);
+  };
+  const venue=()=>{fly(stops[current++%stops.length]);visits++;timer=setTimeout(visits>=5?overview:venue,10000);};
+  overview();
+ };
  tour.onclick=()=>{if(timer)stop();else startTour();};
  map.on('dragstart',stop);map.on('zoomstart',e=>{if(e.originalEvent)stop();});
  const fit=()=>{stop();if(!points.length)return;const bounds=new mapboxgl.LngLatBounds();points.forEach(p=>bounds.extend([p.lng,p.lat]));map.fitBounds(bounds,{padding:65,maxZoom:16,pitch:45,duration:900});};
@@ -49,5 +58,5 @@ window.HMMap3D={mount({points,view,container,token}){
  });
  map.on('error',e=>{if(e.error?.status===401||e.error?.status===403){details.textContent='Mapbox access was denied. Check the public token and allowed URL restrictions.';}});
  document.getElementById('fit-map').onclick=fit;
- return {getCenter:()=>map.getCenter(),getZoom:()=>map.getZoom(),getPitch:()=>map.getPitch(),getBearing:()=>map.getBearing(),resize:()=>map.resize(),update:newPoints=>{points=newPoints;groups.clear();points.forEach(p=>{const key=p.lng+','+p.lat;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(p);});sites=[...groups.values()];map.getSource('hm-sites')?.setData(snapshot());if(selectedKey&&groups.has(selectedKey))describe(groups.get(selectedKey));else list();},remove:()=>{stop();clearInterval(pulseTimer);map.remove();tools.remove();details.remove();}};
+ return {getCenter:()=>map.getCenter(),getZoom:()=>map.getZoom(),getPitch:()=>map.getPitch(),getBearing:()=>map.getBearing(),resize:()=>map.resize(),update:newPoints=>{points=newPoints;groups.clear();points.forEach(p=>{const key=p.lng+','+p.lat;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(p);});sites=[...groups.values()];map.getSource('hm-sites')?.setData(snapshot());if(selectedKey&&groups.has(selectedKey))describe(groups.get(selectedKey));else if(!timer)list();},remove:()=>{stop();clearInterval(pulseTimer);map.remove();tools.remove();details.remove();}};
 }};
