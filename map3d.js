@@ -27,7 +27,8 @@ window.HMMap3D={mount({points,view,container,token}){
  const fly=index=>{const group=sites[index];if(!group)return;map.flyTo({center:[group[0].lng,group[0].lat],zoom:17,pitch:60,duration:window.matchMedia('(prefers-reduced-motion: reduce)').matches?0:1600});describe(group);};
  const list=()=>{selectedKey=null;details.replaceChildren();const q=search.value.toLowerCase().trim();const matches=sites.map((group,index)=>({group,index})).filter(x=>x.group.some(p=>((p.venue||'')+' '+(p.name||'')).toLowerCase().includes(q)));const info=document.createElement('p');info.textContent=matches.length+' locations · Select a venue to locate its screens';details.append(info);matches.slice(0,40).forEach(({group,index})=>details.append(makeButton((group[0].venue||group[0].name||'Unnamed location')+' · '+group.length+' screens',()=>{stop();fly(index);})));if(matches.length>40){const more=document.createElement('p');more.textContent='Search to narrow the locations shown.';details.append(more);}};
  search.oninput=()=>{stop();list();};tilt.onclick=()=>map.easeTo({pitch:map.getPitch()>10?0:60,duration:600});
- tour.onclick=()=>{if(timer){stop();return;}if(!sites.length)return;tour.textContent='Stop venue tour';fly(current++%sites.length);timer=setInterval(()=>fly(current++%sites.length),8000);};
+ const startTour=()=>{if(!sites.length)return;const unique=new Map();sites.forEach((g,i)=>{const venue=g[0].venue||g[0].name||String(i);if(!unique.has(venue))unique.set(venue,i);});const stops=[...unique.values()];tour.textContent='Pause venue tour';const next=()=>fly(stops[current++%stops.length]);next();timer=setInterval(next,10000);};
+ tour.onclick=()=>{if(timer)stop();else startTour();};
  map.on('dragstart',stop);map.on('zoomstart',e=>{if(e.originalEvent)stop();});
  const fit=()=>{stop();if(!points.length)return;const bounds=new mapboxgl.LngLatBounds();points.forEach(p=>bounds.extend([p.lng,p.lat]));map.fitBounds(bounds,{padding:65,maxZoom:16,pitch:45,duration:900});};
  map.on('load',()=>{
@@ -44,7 +45,7 @@ window.HMMap3D={mount({points,view,container,token}){
   map.on('click','hm-clusters',e=>{stop();const f=e.features[0];map.getSource('hm-sites').getClusterExpansionZoom(f.properties.cluster_id,(error,zoom)=>{if(!error)map.easeTo({center:f.geometry.coordinates,zoom,pitch:55});});});
   map.on('click','hm-screen-points',e=>{stop();fly(Number(e.features[0].properties.index));});
   for(const id of ['hm-clusters','hm-screen-points']){map.on('mouseenter',id,()=>map.getCanvas().style.cursor='pointer');map.on('mouseleave',id,()=>map.getCanvas().style.cursor='');}
-  if(!view)fit();list();
+  if(!view)fit();list();if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches)startTour();
  });
  map.on('error',e=>{if(e.error?.status===401||e.error?.status===403){details.textContent='Mapbox access was denied. Check the public token and allowed URL restrictions.';}});
  document.getElementById('fit-map').onclick=fit;
