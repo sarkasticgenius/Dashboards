@@ -9,7 +9,11 @@ window.HMMap3D={mount({points,view,container,token}){
  const tilt=document.createElement('button');tilt.textContent='2D / 3D';
  const tour=document.createElement('button');tour.textContent='Start venue tour';
  const details=document.createElement('div');details.className='map3d-details';details.setAttribute('aria-live','polite');
- tools.append(search,tilt,tour);root.before(tools);root.after(details);
+ const sound=document.createElement('button');sound.textContent='Enable map sound';sound.setAttribute('aria-pressed','false');let audio=null,soundOn=false;
+ const volume=document.createElement('input');volume.type='range';volume.min='0';volume.max='100';volume.value='15';volume.setAttribute('aria-label','Map chime volume');volume.style.maxWidth='110px';
+ sound.onclick=async()=>{try{if(!audio)audio=new (window.AudioContext||window.webkitAudioContext)();await audio.resume();soundOn=!soundOn;sound.textContent=soundOn?'Mute map sound':'Enable map sound';sound.setAttribute('aria-pressed',String(soundOn));}catch(e){sound.textContent='Audio unavailable';}};
+ const chime=()=>{if(!soundOn||!audio||audio.state!=='running'||document.hidden)return;const t=audio.currentTime;for(const [i,hz] of [523.25,659.25].entries()){const osc=audio.createOscillator(),gain=audio.createGain();osc.type='sine';osc.frequency.value=hz;gain.gain.setValueAtTime(0,t+i*.12);gain.gain.linearRampToValueAtTime(Number(volume.value)/100*.12,t+i*.12+.03);gain.gain.exponentialRampToValueAtTime(.0001,t+i*.12+.7);osc.connect(gain);gain.connect(audio.destination);osc.start(t+i*.12);osc.stop(t+i*.12+.75);}};
+ tools.append(search,tilt,tour,sound,volume);root.before(tools);root.after(details);
  const groups=new Map();points.forEach(p=>{const key=p.lng+','+p.lat;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(p);});
  let sites=[...groups.values()];let timer=null,current=0,pulseTimer=null,selectedKey=null;
  const statusColor=['case',['>', ['get','offline'],0],'#ff3e58',['>', ['get','unknown'],0],'#9ba8b8','#16ef9d'];
@@ -24,7 +28,7 @@ window.HMMap3D={mount({points,view,container,token}){
   const summary=document.createElement('p');summary.textContent=group.length+' screens at this inventory coordinate · '+group.filter(p=>p.state==='online').length+' online · '+group.filter(p=>p.state==='offline').length+' offline';details.append(summary);
   group.forEach(p=>{const row=document.createElement('div');row.className='map3d-screen';const status=document.createElement('span');status.className='map3d-status '+p.state;status.textContent=p.state.toUpperCase();const text=document.createElement('span');text.textContent=(p.name||'Unnamed screen')+' · '+p.source+(p.lastSeen?' · Last seen '+new Date(p.lastSeen).toLocaleString('en-GB',{timeZone:'Asia/Dubai'})+' GST':'');row.append(status,text);details.append(row);});
  };
- const fly=index=>{const group=sites[index];if(!group)return;map.flyTo({center:[group[0].lng,group[0].lat],zoom:17,pitch:60,duration:window.matchMedia('(prefers-reduced-motion: reduce)').matches?0:1600});describe(group);};
+ const fly=index=>{const group=sites[index];if(!group)return;map.once('moveend',chime);map.flyTo({center:[group[0].lng,group[0].lat],zoom:17,pitch:60,duration:window.matchMedia('(prefers-reduced-motion: reduce)').matches?0:1600});describe(group);};
  const list=()=>{selectedKey=null;details.replaceChildren();const q=search.value.toLowerCase().trim();const matches=sites.map((group,index)=>({group,index})).filter(x=>x.group.some(p=>((p.venue||'')+' '+(p.name||'')).toLowerCase().includes(q)));const info=document.createElement('p');info.textContent=matches.length+' locations · Select a venue to locate its screens';details.append(info);matches.slice(0,40).forEach(({group,index})=>details.append(makeButton((group[0].venue||group[0].name||'Unnamed location')+' · '+group.length+' screens',()=>{stop();fly(index);})));if(matches.length>40){const more=document.createElement('p');more.textContent='Search to narrow the locations shown.';details.append(more);}};
  search.oninput=()=>{stop();list();};tilt.onclick=()=>map.easeTo({pitch:map.getPitch()>10?0:60,duration:600});
  const startTour=()=>{
@@ -58,5 +62,5 @@ window.HMMap3D={mount({points,view,container,token}){
  });
  map.on('error',e=>{if(e.error?.status===401||e.error?.status===403){details.textContent='Mapbox access was denied. Check the public token and allowed URL restrictions.';}});
  document.getElementById('fit-map').onclick=fit;
- return {getCenter:()=>map.getCenter(),getZoom:()=>map.getZoom(),getPitch:()=>map.getPitch(),getBearing:()=>map.getBearing(),resize:()=>map.resize(),update:newPoints=>{points=newPoints;groups.clear();points.forEach(p=>{const key=p.lng+','+p.lat;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(p);});sites=[...groups.values()];map.getSource('hm-sites')?.setData(snapshot());if(selectedKey&&groups.has(selectedKey))describe(groups.get(selectedKey));else if(!timer)list();},remove:()=>{stop();clearInterval(pulseTimer);map.remove();tools.remove();details.remove();}};
+ return {getCenter:()=>map.getCenter(),getZoom:()=>map.getZoom(),getPitch:()=>map.getPitch(),getBearing:()=>map.getBearing(),resize:()=>map.resize(),update:newPoints=>{points=newPoints;groups.clear();points.forEach(p=>{const key=p.lng+','+p.lat;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(p);});sites=[...groups.values()];map.getSource('hm-sites')?.setData(snapshot());if(selectedKey&&groups.has(selectedKey))describe(groups.get(selectedKey));else if(!timer)list();},remove:()=>{stop();clearInterval(pulseTimer);if(audio)audio.close();map.remove();tools.remove();details.remove();}};
 }};

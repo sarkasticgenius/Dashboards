@@ -11,126 +11,36 @@ const age=x=>{if(!validDate(x))return 'Not reported';const m=Math.max(0,Math.flo
 const stamp=x=>validDate(x)?new Date(x).toLocaleString('en-GB',{timeZone:'Asia/Dubai'}):'Not reported';
 const online=d=>validDate(d.last_seen)&&Date.now()-Date.parse(d.last_seen)<30*60000;
 const config=window.HM_CONFIG;
-if(!window.supabase||!config){$('#app').textContent='Unable to load sign-in. Please reload.';return;}
-const client=window.supabase.createClient(config.url,config.anonKey,{auth:{storageKey:'hm-nexus-session-v1',persistSession:true,autoRefreshToken:true,detectSessionInUrl:false}});
+if(!config){$('#app').textContent='Unable to load dashboard configuration. Please reload.';return;}
 let page=location.hash.slice(1)||window.INITIAL_PAGE||'command';if(!pages.some(p=>p[0]===page))page='command';
 let profile=null,perms=[],factor=null,authBusy=false,cache=null,error='',scope='all',generation=0,fetching=false,rotation=null,loadedAt=null,authGeneration=0;
 let mapInstance=null,mapView=null;
 const params=new URLSearchParams(location.search);if(params.get('display')==='wall')document.body.classList.add('wall-mode');
 const brand='<a class="brand" href="#command"><img class="hm-logo" src="hm-logo.png" alt="HM"><span><strong>HYPERMEDIA</strong><small>NETWORK INTELLIGENCE</small></span></a>';
-function allowed(area){return profile?.role==='admin'||perms.some(p=>p.area===area&&p.can_view);}
-function authView(message=''){
- document.title='HM Nexus · Sign in';
- $('#app').innerHTML=`<section class="auth-card">${brand}<h1>${factor?'Two-step verification':'Sign in to HM Nexus'}</h1><p>Use your HM Operations account. Your existing app permissions apply to these dashboards.</p><form id="login-form">${factor?'<label for="code">Authenticator code</label><input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required>':'<label for="identifier">Username or email</label><input id="identifier" name="identifier" autocomplete="username" required><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required>'}<p class="auth-error" role="alert">${esc(message)}</p><button type="submit">${factor?'Verify and open dashboards':'Sign in'}</button></form><p>The website is public; operational data requires an authorized account. <a href="https://operations.hypermedia.ae/" target="_blank" rel="noopener">Open HM Operations</a></p>${factor?'<button id="cancel-auth">Use another account</button>':''}</section>`;
- $('#login-form').onsubmit=async e=>{
-  e.preventDefault();if(authBusy)return;authBusy=true;const btn=e.target.querySelector('button');btn.disabled=true;btn.textContent='Checking…';
-  try{
-   if(factor){const r=await client.auth.mfa.challengeAndVerify({factorId:factor,code:$('#code').value.trim()});if(r.error)throw r.error;factor=null;}
-   else{const identifier=$('#identifier').value.trim(),password=$('#password').value;
-    const {data,error:err}=await client.functions.invoke('resolve-login',{body:{identifier,password}});$('#password').value='';
-    if(err||data?.error||!data?.access_token)throw new Error('Sign-in failed. Check your HM credentials and try again.');
-    const r=await client.auth.setSession({access_token:data.access_token,refresh_token:data.refresh_token});if(r.error)throw r.error;
-   }
-   await authenticate();
-  }catch(e){authView(e.message||'Sign-in could not be completed.');}finally{authBusy=false;}
- };
- if($('#cancel-auth'))$('#cancel-auth').onclick=signOut;
-}
-async function signOut(){authGeneration++;generation++;profile=null;perms=[];cache=null;loadedAt=null;error='';factor=null;if(mapInstance){mapInstance.remove();mapInstance=null;}mapView=null;clearInterval(rotation);rotation=null;authView();await client.auth.signOut({scope:'local'});}
-async function authenticate(){
- const authId=++authGeneration;
- try{
-  const {data:{session},error:sessionError}=await client.auth.getSession();if(sessionError)throw sessionError;
-  if(!session){authView();return;}
-  const {data:assurance,error:mfaError}=await client.auth.mfa.getAuthenticatorAssuranceLevel();if(mfaError)throw mfaError;
-  if(assurance.nextLevel==='aal2'&&assurance.currentLevel!=='aal2'){
-   const {data,error:err}=await client.auth.mfa.listFactors();if(err)throw err;factor=data.totp.find(f=>f.status==='verified')?.id;if(!factor)throw new Error('MFA verification is required. Open HM Operations to resolve your sign-in.');authView();return;
-  }
-  const [{data:p,error:pe},{data:ps,error:pse}]=await Promise.all([client.from('profiles').select('id,role,active').eq('id',session.user.id).maybeSingle(),client.from('user_permissions').select('area,can_view').eq('user_id',session.user.id)]);
-  if(pe||pse)throw pe||pse;if(!p?.active)throw new Error('This HM account is inactive or inaccessible.');
-  if(authId!==authGeneration)return;profile=p;perms=ps||[];factor=null;render();await refresh();
-  if(params.get('rotate')==='1'&&!rotation)toggleRotate();
- }catch(e){profile=null;cache=null;authView(e.message||'Unable to verify account access.');}
-}
-async function allRows(table,columns,filter){
- const rows=[];for(let from=0;;from+=500){let q=client.from(table).select(columns).order('id').range(from,from+499);if(filter)q=filter(q);const {data,error}=await q;if(error)throw error;rows.push(...data);if(data.length<500)return rows;}
-}
-async function loadIot(){
- // app_settings is admin-only in the app's existing RLS. Project only telemetry fields;
- // do not request the full JSON object, which also contains vendor credentials.
- if(profile.role!=='admin')throw new Error('This IoT feed currently requires an HM administrator account, matching the app database permissions.');
- const {data,error}=await client.from('app_settings').select('lastSync:value->>lastSync,devices:value->lastDevices,excluded:value->excludedDeviceIds,staleMinutes:value->staleAfterMinutes').eq('key','iotApi').maybeSingle();
- if(error)throw error;if(!data||!Array.isArray(data.devices))throw new Error('No accessible IoT sync snapshot. Run the existing IoT sync from HM Operations.');
- const excluded=new Set((data.excluded||[]).map(String));return {...data,devices:data.devices.filter(d=>!excluded.has(String(d.deviceId)))};
-}
-async function load(){
- if(page==='wall')return {iot:await loadIot()};
- if(page==='campaigns')return loadCampaigns();
- if(page==='retail'){
-  const result={iot:await loadIot(),retailDevices:[],retailIssues:[]};
-  if(allowed('workspaceDirectory')){try{result.retailDevices=await allRows('workspace_devices','id,hostname,location,last_seen,problems,broadsign_player_id,grassfish_box_id,du_data_used_gb,du_data_total_gb,du_scraped_at',q=>q.is('removed_at',null));}catch(e){result.retailIssues.push('Player data: '+e.message);}}else result.retailIssues.push('Digital Directory permission required for player and consumption data.');
-  if(allowed('assetsInventory')){try{const assets=await allRows('asset_inventory','venue,player_type,player_box_id',q=>q.is('deleted_at',null));const matches=new Map();for(const a of assets){const store=retailStore(a);if(!store||!a.player_box_id)continue;const key=String(a.player_type).toLowerCase()+':'+String(a.player_box_id).trim();if(!matches.has(key))matches.set(key,new Set());matches.get(key).add(store);}result.retailDevices=result.retailDevices.map(d=>{if(retailStore({venue:d.location}))return d;const stores=new Set([...matches.get('broadsign:'+d.broadsign_player_id)||[],...matches.get('grassfish:'+d.grassfish_box_id)||[]]);return stores.size===1?{...d,location:[...stores][0]}:d;});}catch(e){result.retailIssues.push('Inventory matching unavailable: '+e.message);}}
-  try{result.retailCampaigns=(await loadCampaigns()).campaigns.filter(c=>(c.venues||[]).some(v=>retailStore({venue:v.venue})));}catch(e){result.retailIssues.push('Traffic Sheet unavailable: '+e.message);}
-  return result;
- }
- if(page==='command'||page==='map'){
-  if(!allowed('locations')&&!allowed('maintenancePanels'))throw new Error('Your HM account needs Locations or Maintenance Panels view access.');
-  const locations=await allRows('locations','id,name,chain,is_combined,broadsign_healthy_count,grassfish_healthy_count,broadsign_as_of,grassfish_as_of,location_sub_assets(id,name,status,source,poll_last_utc,notes)',q=>q.is('deleted_at',null));
-  if(page==='command')return {locations};
-  const mapData={assets:[],devices:[],iot:null,issues:[]};
-  if(allowed('assetsInventory')){try{mapData.assets=await allRows('asset_inventory','id,name,venue,lat,lng,player_type,player_box_id',q=>q.is('deleted_at',null));}catch(e){mapData.issues.push('Asset inventory unavailable: '+e.message);}}else mapData.issues.push('Asset Inventory view permission is required for map coordinates.');
-  if(allowed('workspaceDirectory')){try{mapData.devices=await allRows('workspace_devices','id,hostname,last_seen,broadsign_player_id,grassfish_box_id',q=>q.is('removed_at',null));}catch(e){mapData.issues.push('Agent status unavailable: '+e.message);}}
-  if(profile.role==='admin'){try{mapData.iot=await loadIot();}catch(e){mapData.issues.push('IoT map status unavailable.');}}
-  return {locations,mapData};
- }
- if(!allowed('workspaceDirectory'))throw new Error('Your HM account needs Digital Directory view access.');
- const devices=await allRows('workspace_devices','id,hostname,location,last_seen,problems,ignored_problem_types,du_data_used_gb,du_data_total_gb,du_scraped_at',q=>q.is('removed_at',null));
- let globalIgnored=[];
- if(page==='black'){
-  const {data,error}=await client.from('app_settings').select('value').eq('key','workspaceDirectoryIgnoredProblemTypes').maybeSingle();if(error)throw error;
-  // If RLS hides this setting, do not silently claim the app's suppression policy was applied.
-  globalIgnored=Array.isArray(data?.value)?data.value:null;
- }
- const extra={tickets:[],reports:[],issueErrors:[]};
- if(page==='black'){
-  for(const [permission,key,tableName,fields] of [['tickets','tickets','tickets','id,title,location,status,priority,date_reported,asset_inv_label'],['screenReports','reports','screen_reports','id,asset_id,description,status,ticket_id,created_at']]){
-   if(!allowed(permission)){extra.issueErrors.push(permission+' permission required.');continue;}
-   try{extra[key]=await allRows(tableName,fields,q=>tableName==='tickets'?q.is('deleted_at',null):q);}catch(e){extra.issueErrors.push(tableName+': '+e.message);}
-  }
- }
- return {devices,globalIgnored,...extra};
-}
 async function refresh(){
- if(!profile||fetching)return;fetching=true;const id=generation;
+ if(fetching)return;fetching=true;const id=generation;
  try{
-  // Re-check activity/permissions on every refresh; do not retain rows after access errors.
-  const {data:p,error:pe}=await client.from('profiles').select('id,role,active').eq('id',profile.id).maybeSingle();if(pe)throw pe;if(!p?.active){await signOut();return;}
-  const {data:ps,error:pse}=await client.from('user_permissions').select('area,can_view').eq('user_id',p.id);if(pse)throw pse;
-  profile=p;perms=ps||[];const result=await load();if(id!==generation)return;cache=result;error='';loadedAt=new Date().toISOString();
+  const response=await fetch(config.url+'/rest/v1/rpc/hm_public_dashboard',{
+   method:'POST',headers:{'Content-Type':'application/json',apikey:config.anonKey},
+   body:JSON.stringify({p_view:page}),signal:AbortSignal.timeout(15000),cache:'no-store'
+  });
+  if(!response.ok)throw new Error('Public data feed unavailable (HTTP '+response.status+').');
+  const result=await response.json();
+  if(!result||typeof result!=='object'||!(result.iot||result.locations||result.devices||result.campaigns))throw new Error('Public feed returned an invalid snapshot.');
+  if(id!==generation)return;cache=result;error='';loadedAt=new Date().toISOString();
  }catch(e){if(id===generation){cache=null;error=e.message||'Data unavailable. Please retry.';}}
- finally{fetching=false;if(id===generation&&profile)render();else if(profile)refresh();}
+ finally{fetching=false;if(id===generation)render();else refresh();}
 }
 function table(headers,rows){return `<div class="live-table"><table><thead><tr>${headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.length?rows.map(r=>`<tr>${r.map(c=>`<td>${esc(c)}</td>`).join('')}</tr>`).join(''):`<tr><td colspan="${headers.length}">No matching records.</td></tr>`}</tbody></table></div>`;}
 function panel(title,body){return `<section class="panel"><div class="panel-head"><h2>${esc(title)}</h2></div><div class="live-panel-body">${body}</div></section>`;}
 function barChart(items){const max=Math.max(1,...items.map(x=>x[1]));return `<div class="live-bars">${items.map(([label,value])=>`<div><div class="live-bar-label"><span>${esc(label)}</span><b>${number(value)}</b></div><div class="live-track"><div class="live-fill" data-metric="${esc(String(label).toLowerCase())}" style="width:${Math.max(0,value/max*100)}%"></div></div></div>`).join('')||'No reported values.'}</div>`;}
 function countBy(rows,get){const m=new Map();rows.forEach(r=>{const k=String(get(r)||'Unknown');m.set(k,(m.get(k)||0)+1)});return [...m].sort((a,b)=>b[1]-a[1]);}
-function hero(title,value,label,connected,total,stats){const pct=total?Math.min(100,Math.max(0,connected/total*100)):0;return `<section class="pulse-hero"><div class="hero-caption"><span class="micro">HM / AUTHENTICATED TELEMETRY</span><span class="orbit-symbol">◈</span></div><h2>${esc(title)}</h2><div class="holo-stage"><div class="orbital o1"></div><div class="orbital o2"></div><div class="holo-ring" style="--ring:conic-gradient(var(--green) 0 ${pct}%,var(--red) ${pct}% 100%)"><div class="ring-hole"></div></div><div class="holo-number">${esc(value)}<span>${esc(label)}</span></div><div class="chart-coordinate left">HM OPERATIONS</div><div class="chart-coordinate right">SYNCED DATA</div></div><div class="pulse-stats">${stats.map(([k,v])=>`<div data-metric="${esc(k.toLowerCase())}"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('')}</div><div class="hero-note">Refreshes every 30 seconds · upstream sync cadence applies</div></section>`;}
+function hero(title,value,label,connected,total,stats){const pct=total?Math.min(100,Math.max(0,connected/total*100)):0;return `<section class="pulse-hero"><div class="hero-caption"><span class="micro">HM / PUBLIC TELEMETRY</span><span class="orbit-symbol">◈</span></div><h2>${esc(title)}</h2><div class="holo-stage"><div class="orbital o1"></div><div class="orbital o2"></div><div class="holo-ring" style="--ring:conic-gradient(var(--green) 0 ${pct}%,var(--red) ${pct}% 100%)"><div class="ring-hole"></div></div><div class="holo-number">${esc(value)}<span>${esc(label)}</span></div><div class="chart-coordinate left">HM OPERATIONS</div><div class="chart-coordinate right">SYNCED DATA</div></div><div class="pulse-stats">${stats.map(([k,v])=>`<div data-metric="${esc(k.toLowerCase())}"><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join('')}</div><div class="hero-note">Refreshes every 30 seconds · upstream sync cadence applies</div></section>`;}
 function kpis(items){return `<div class="kpis secondary-kpis">${items.map(([label,v,sub])=>`<div class="kpi"><div class="kpi-label">${esc(label)}</div><div class="kpi-value">${esc(v)}</div><div class="kpi-sub">${esc(sub||'')}</div></div>`).join('')}</div>`;}
 // Retail membership is explicit; extend this list when another store joins.
 const retailStores=['LULU Al Wahda','Union Coop Umm Suqeim','Union Coop Al Warqa'];
 const retailKey=value=>String(value||'').toLowerCase().replace(/[^a-z0-9]/g,'');
 function retailStore(device){return retailStores.find(name=>retailKey(name)===retailKey(device.venue||device.storeName))||null;}
-let trafficCache=null,trafficFetched=0;
-async function loadCampaigns(){
- if(trafficCache&&Date.now()-trafficFetched<300000)return trafficCache;
- if(!allowed('trafficSheet'))throw new Error('Traffic Sheet view permission required.');
- const month=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Dubai',year:'numeric',month:'2-digit'}).format(new Date()).replace('/','-');
- const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Dubai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
- const ym=today.slice(0,7);
- const {data,error}=await client.functions.invoke('traffic-sheet-proxy',{body:{startMonth:ym,endMonth:ym}});
- if(error)throw error;if(data?.error)throw new Error(data.error);if(!Array.isArray(data?.campaigns))throw new Error('Traffic Sheet returned no valid campaign snapshot.');
- let catalog=[],catalogError='';if(allowed('campaigns')){try{catalog=await allRows('campaigns','id,name,locations,start_date,end_date,status',q=>q.is('deleted_at',null));}catch(e){catalogError=e.message;}}trafficCache={campaigns:data.campaigns,today,catalog,catalogError};trafficFetched=Date.now();return trafficCache;
-}
 function retailDetails(c){
  const devices=(c.retailDevices||[]).filter(d=>retailStore({venue:d.location})&&(scope==='all'||retailStore({venue:d.location})===scope));
  const usage=devices.filter(d=>validDate(d.du_scraped_at));
@@ -139,10 +49,24 @@ function retailDetails(c){
  if((c.retailCampaigns||[]).length)content+=panel('Retail Traffic Sheet',table(['Campaign','Status','Start','End'],c.retailCampaigns.map(x=>[x.campaignName,x.status,x.startDate,x.endDate])));
  content+='<div class="live-notice">Player and consumption records use exact store names or unambiguous inventory player-ID matches. Unmatched devices are omitted. '+esc((c.retailIssues||[]).join(' '))+'</div>';return content;
 }
+function shoutbox(c){
+ const entries=[];
+ for(const t of c.tickets||[])if(!['Closed','Resolved'].includes(t.status))entries.push({time:t.date_reported,source:'TICKET',name:t.location||t.asset_inv_label||'Maintenance',text:t.title+' · '+t.priority+' · '+t.status});
+ for(const r of c.reports||[])if(!['Resolved','Dismissed'].includes(r.status))entries.push({time:r.created_at,source:'SCREEN REPORT',name:r.asset_id||'Screen',text:r.description+' · '+r.status});
+ for(const d of c.devices||[]){const problems=(d.problems||[]).filter(p=>!(/^Signage player (not running|running but not visible)/.test(p)&&((c.globalIgnored||[]).includes('signage-black-screen')||(d.ignored_problem_types||[]).includes('signage-black-screen'))));if(!online(d)||problems.length)entries.push({time:d.last_seen,source:'DEVICE',name:d.hostname+' · '+(d.location||'Unassigned'),text:!online(d)?'Offline — last heartbeat '+age(d.last_seen):problems.join('; ')});}
+ entries.sort((a,b)=>(Date.parse(b.time)||0)-(Date.parse(a.time)||0));
+ return panel('Live issue shoutbox','<div class="live-table shoutbox" aria-label="Live app issues">'+(entries.map(e=>'<article class="shout"><div><b>'+esc(e.source)+'</b><time>'+esc(age(e.time))+'</time></div><strong>'+esc(e.name)+'</strong><p>'+esc(e.text)+'</p></article>').join('')||'<p class="status-good">No open issues reported in the available feeds.</p>')+'</div><small>App issue feed · refreshed every 30 seconds · device timestamps are heartbeats, not issue creation times</small>');
+}
 function intelligenceView(c){
  const devices=(c.devices||[]).map(d=>({...d,problems:(d.problems||[]).filter(p=>!(/^Signage player (not running|running but not visible)/.test(p)&&((c.globalIgnored||[]).includes('signage-black-screen')||(d.ignored_problem_types||[]).includes('signage-black-screen'))))})),issues=devices.filter(d=>!online(d)||(d.problems||[]).length),tickets=(c.tickets||[]).filter(t=>!['Closed','Resolved'].includes(t.status)),reports=(c.reports||[]).filter(r=>!['Resolved','Dismissed'].includes(r.status));
  const recommendations=[];if(issues.some(d=>!online(d)))recommendations.push('Check power and connectivity for missing heartbeats before restarting players.');if(reports.some(r=>!r.ticket_id))recommendations.push('Review new screen reports and link confirmed faults to a maintenance ticket.');if(tickets.some(t=>['Critical','High'].includes(t.priority)))recommendations.push('Prioritize high and critical tickets; verify the screen after repair before closure.');if(!recommendations.length)recommendations.push('Continue monitoring; a healthy heartbeat alone does not verify the physical picture.');
- return {options:[],hero:hero('Screen assurance',issues.length,'DEVICES REQUIRING REVIEW',devices.length-issues.length,devices.length,[['ONLINE',devices.filter(online).length],['OFFLINE',devices.filter(d=>!online(d)).length],['OPEN TICKETS',tickets.length]]),body:kpis([['Screen reports',reports.length],['Devices with issues',issues.length],['Open tickets',tickets.length]])+panel('Recommended actions','<ul>'+recommendations.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul><button id="notify-screen">Send issue summary to existing Slack</button>')+'<div class="live-notice">Reported signals, not camera or pixel verification. Existing app alert scheduling remains responsible for automatic Slack delivery. '+esc((c.issueErrors||[]).join(' '))+'</div>'+panel('Digital Directory issues',table(['Player','Location','Status','Problems'],issues.map(d=>[d.hostname,d.location,!online(d)?'Offline':'Online',(d.problems||[]).join('; ')||'No recent heartbeat'])))+panel('Open maintenance tickets',table(['Issue','Location / asset','Priority','Status','Reported'],tickets.map(t=>[t.title,t.location||t.asset_inv_label,t.priority,t.status,age(t.date_reported)])))+panel('Screen reports',table(['Asset','Report','Status','Linked ticket','Age'],reports.map(r=>[r.asset_id,r.description,r.status,r.ticket_id||'Not linked',age(r.created_at)])))};
+ return {options:[],hero:hero('Screen assurance',issues.length,'DEVICES REQUIRING REVIEW',devices.length-issues.length,devices.length,[['ONLINE',devices.filter(online).length],['OFFLINE',devices.filter(d=>!online(d)).length],['OPEN TICKETS',tickets.length]]),body:shoutbox(c)+kpis([['Screen reports',reports.length],['Devices with issues',issues.length],['Open tickets',tickets.length]])+panel('Recommended actions','<ul>'+recommendations.map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>')+'<div class="live-notice">Reported signals, not camera or pixel verification. Existing app alert scheduling remains responsible for automatic Slack delivery. '+esc((c.issueErrors||[]).join(' '))+'</div>'+panel('Digital Directory issues',table(['Player','Location','Status','Problems'],issues.map(d=>[d.hostname,d.location,!online(d)?'Offline':'Online',(d.problems||[]).join('; ')||'No recent heartbeat'])))+panel('Open maintenance tickets',table(['Issue','Location / asset','Priority','Status','Reported'],tickets.map(t=>[t.title,t.location||t.asset_inv_label,t.priority,t.status,age(t.date_reported)])))+panel('Screen reports',table(['Asset','Report','Status','Linked ticket','Age'],reports.map(r=>[r.asset_id,r.description,r.status,r.ticket_id||'Not linked',age(r.created_at)])))};
+}
+function playbackPanel(c){
+ const rows=(c.playback||[]).filter(x=>Number.isFinite(Number(x.playouts))&&Number(x.playouts)>0),today=c.today,now=Date.parse(today+'T00:00:00Z'),week=now-((new Date(now).getUTCDay()+6)%7)*86400000;
+ const dated=rows.filter(x=>/^\d{4}-\d{2}-\d{2}/.test(x.date||''));const campaigns=rs=>!c.playbackFetchedAt?'Unavailable':new Set(rs.map(x=>x.campaignId||x.campaign).filter(Boolean)).size;
+ const total=rs=>rs.reduce((n,x)=>n+Number(x.playouts),0);
+ return panel('Confirmed playback · reporting service','<div class="live-notice">'+(c.playbackError?esc(c.playbackError)+'. ':'' )+'Updated '+esc(age(c.playbackFetchedAt))+(validDate(c.playbackFetchedAt)&&Date.now()-Date.parse(c.playbackFetchedAt)>1200000?' · STALE':'')+'. '+(dated.length?'Campaigns with reported plays; these are not first-ever launch dates.':'The source has not supplied dated positive playout rows; launch counts cannot be confirmed.')+'</div>'+kpis([['Played today',campaigns(dated.filter(x=>x.date.slice(0,10)===today))],['Played this week',campaigns(dated.filter(x=>Date.parse(x.date.slice(0,10)+'T00:00:00Z')>=week))],['Played this month',campaigns(dated.filter(x=>x.date.startsWith(today.slice(0,7))))],['Reported playouts',c.playbackFetchedAt?number(total(rows)):'Unavailable']])+table(['Campaign','Site','Reporting date','Playouts'],rows.map(x=>[x.campaign||x.campaignId||'Not reported',x.site||'Not reported',x.date||'Not reported',number(x.playouts)])))+'<div class="live-notice">Traffic Sheet updated '+esc(age(c.trafficFetchedAt))+'. '+esc(c.trafficError||'')+'</div>';
 }
 function campaignView(c){
  const today=c.today,rows=c.campaigns||[],day=86400000,at=x=>Date.parse(String(x||'').slice(0,10)+'T00:00:00Z'),now=at(today),month=today.slice(0,7),date=new Date(now),weekStart=now-((date.getUTCDay()+6)%7)*day;
@@ -150,7 +74,7 @@ function campaignView(c){
  const period=scope==='all'?'month':scope;const selected=period==='today'?rows.filter(x=>start(x)<=now&&end(x)>=now):period==='week'?rows.filter(x=>start(x)<weekStart+7*day&&end(x)>=weekStart):rows;
  const rangeStart=period==='today'?now:period==='week'?weekStart:at(month+'-01'),rangeEnd=period==='today'?now+day:period==='week'?weekStart+7*day:Date.UTC(date.getUTCFullYear(),date.getUTCMonth()+1,1),span=rangeEnd-rangeStart;
  const gantt=selected.filter(x=>Number.isFinite(start(x))&&Number.isFinite(end(x))).map(x=>{const left=Math.max(0,(start(x)-rangeStart)/span*100),right=Math.min(100,(end(x)+day-rangeStart)/span*100);return '<div class="gantt-row"><span>'+esc(x.campaignName)+'</span><div class="gantt-track"><i style="left:'+left+'%;width:'+Math.max(0,right-left)+'%"></i></div><small>'+esc(x.startDate)+' → '+esc(x.endDate)+'</small></div>';}).join('');
- return {options:['today','week','month'],hero:'',body:kpis([['Scheduled active today',active.length],['Starting today',starts.length],['Starting this week',week.length],['Starting this month',monthly.length]])+'<div class="live-notice">Traffic Sheet schedule · Dubai calendar · '+esc(today)+' · Start dates are scheduled launches; confirmed go-live/playback is not available in this feed. Week: Monday–Sunday. Current-month source window.</div>'+panel('Campaign timeline · '+period,'<div class="live-table gantt-list">'+(gantt||'No campaigns in this period.')+'</div>')+panel('Traffic Sheet campaign detail',table(['Campaign','Source status','Venues','Start','End','Scheduled spots'],selected.map(x=>[x.campaignName,x.status,(x.venues||[]).map(v=>v.venue).join(', '),x.startDate,x.endDate,(x.days||[]).reduce((n,d)=>n+(Number(d.spots)||0),0)])))+panel('App campaign register',table(['Campaign','Location','Recorded status','Start','End'],(c.catalog||[]).map(x=>[x.name,x.locations,x.status,x.start_date,x.end_date])))+(c.catalogError?'<div class="live-notice">'+esc(c.catalogError)+'</div>':'')};
+ return {options:['today','week','month'],hero:'',body:playbackPanel(c)+kpis([['Scheduled active today',active.length],['Starting today',starts.length],['Starting this week',week.length],['Starting this month',monthly.length]])+'<div class="live-notice">Traffic Sheet schedule · Dubai calendar · '+esc(today)+' · Start dates are scheduled launches; confirmed go-live/playback is not available in this feed. Week: Monday–Sunday. Current-month source window.</div>'+panel('Campaign timeline · '+period,'<div class="live-table gantt-list">'+(gantt||'No campaigns in this period.')+'</div>')+panel('Traffic Sheet campaign detail',table(['Campaign','Source status','Venues','Start','End','Scheduled spots'],selected.map(x=>[x.campaignName,x.status,(x.venues||[]).map(v=>v.venue).join(', '),x.startDate,x.endDate,(x.days||[]).reduce((n,d)=>n+(Number(d.spots)||0),0)])))+panel('App campaign register',table(['Campaign','Location','Recorded status','Start','End'],(c.catalog||[]).map(x=>[x.name,x.locations,x.status,x.start_date,x.end_date])))+(c.catalogError?'<div class="live-notice">'+esc(c.catalogError)+'</div>':'')};
 }
 
 function view(){
@@ -183,14 +107,13 @@ function view(){
  return {options:[...new Set(all.map(d=>d.location||'Unassigned'))].sort(),hero:hero('Signage assurance',flagged.length,'PLAYER ALERTS TO REVIEW',ds.length-flagged.length,ds.length,[['RECENT',current],['STALE',flagged.length-current],['MONITORED',ds.length]]),body:kpis([['Current alerts',current],['Stale reports',flagged.length-current],['Detector','Player visibility']])+`<div class="live-notice">Agent-reported player process/window alerts — not image-based black-pixel detection. No confidence score or camera evidence is available from this feed. ${cache.globalIgnored===null?'Fleet-wide suppression settings are not accessible; these are reported signals with per-device exclusions only.':'App fleet-wide and per-device exclusions are applied.'} A recent heartbeat does not prove the physical display is healthy.</div>`+panel('Reported signage issues',table(['Player','Venue','Reported issue','Evidence age'],flagged.map(d=>[d.hostname,d.location||'Unassigned',(d.problems||[]).filter(p=>/^Signage player (not running|running but not visible)/.test(p)).join('; '),`${age(d.last_seen)}${online(d)?'':' · STALE'}`])))};
 }
 function render(){
- if(!profile)return;
+
  const retainedMap=page==='map'&&cache?.mapData&&mapInstance?.update?document.querySelector('.map-panel'):null;
  if(retainedMap)retainedMap.remove();
  if(mapInstance&&!retainedMap){mapView={center:mapInstance.getCenter(),zoom:mapInstance.getZoom(),pitch:mapInstance.getPitch?.(),bearing:mapInstance.getBearing?.()};mapInstance.remove();mapInstance=null;}
  const title=pages.find(p=>p[0]===page)[1],v=cache?view():null;document.title='HM Nexus · '+title;
- $('#app').innerHTML=`<header>${brand}<span class="edition">NEXUS <b>LIVE</b></span><div class="header-right"><span class="source-button">${error?'DATA UNAVAILABLE':cache?'HM OPERATIONS · CONNECTED':'CONNECTING'}</span><button id="refresh">Refresh</button><button id="rotate">${rotation?'Stop rotation':'Rotate screens'}</button><button id="fullscreen" aria-label="Toggle fullscreen">⛶</button><button id="logout">Sign out</button></div></header><nav>${pages.map(([id,t],i)=>`<a href="#${id}" class="${id===page?'active':''}"><span>0${i+1}</span>${t}</a>`).join('')}</nav><main data-page="${page}"><div class="pagehead"><div><div class="eyebrow">HM OPERATIONS / AUTHENTICATED</div><h1>${title}</h1></div><div class="live-toolbar">${v?.options?.length?`<select id="scope" aria-label="Filter dashboard"><option value="all">All ${page==='command'?'sources':'venues'}</option>${v.options.map(o=>`<option value="${esc(o)}" ${scope===o?'selected':''}>${esc(o)}</option>`).join('')}</select>`:''}<button id="wall-mode">${document.body.classList.contains('wall-mode')?'Standard view':'Wallboard view'}</button></div></div>${v?`<div class="nexus-stage ${['map','campaigns'].includes(page)?'wide-stage':''}">${v.hero}<div class="nexus-panels">${v.body}</div></div>`:panel(error?'Data unavailable':'Loading HM data',`<div class="live-empty ${error?'load-error':''}" role="status">${esc(error||'Reading your authorized HM Operations data…')}</div>`)}</main><footer><span>HM / NEXUS</span><span>Read-only · Auto-refresh 30s · ${loadedAt?'Last fetched '+stamp(loadedAt)+' GST':'Awaiting data'}</span><a href="https://operations.hypermedia.ae/" target="_blank" rel="noopener">HM Operations</a></footer>`;
- if($('#notify-screen'))$('#notify-screen').onclick=async()=>{const button=$('#notify-screen');button.disabled=true;button.textContent='Sending…';const issues=(cache.devices||[]).filter(d=>(d.problems||[]).length||!online(d));const text='HM Screen Intelligence — '+stamp(new Date().toISOString())+' GST\n'+issues.length+' devices need review; '+(cache.tickets||[]).filter(t=>!['Closed','Resolved'].includes(t.status)).length+' open tickets.\n'+issues.slice(0,12).map(d=>d.hostname+' · '+(d.location||'Unassigned')+' · '+(!online(d)?'Offline':(d.problems||[]).join('; '))).join('\n');const {error}=await client.functions.invoke('slack-notify',{body:{text}});button.textContent=error?'Send failed — retry':'Sent to existing Slack channel';button.disabled=!error;};
- $('#logout').onclick=signOut;$('#refresh').onclick=refresh;$('#rotate').onclick=toggleRotate;$('#wall-mode').onclick=()=>{document.body.classList.toggle('wall-mode');render();};
+ $('#app').innerHTML=`<header>${brand}<span class="edition">NEXUS <b>LIVE</b></span><div class="header-right"><span class="source-button">${error?'DATA UNAVAILABLE':cache?'HM OPERATIONS · CONNECTED':'CONNECTING'}</span><button id="refresh">Refresh</button><button id="rotate">${rotation?'Stop rotation':'Rotate screens'}</button><button id="fullscreen" aria-label="Toggle fullscreen">⛶</button></div></header><nav>${pages.map(([id,t],i)=>`<a href="#${id}" class="${id===page?'active':''}"><span>0${i+1}</span>${t}</a>`).join('')}</nav><main data-page="${page}"><div class="pagehead"><div><div class="eyebrow">HM OPERATIONS / PUBLIC DISPLAY</div><h1>${title}</h1></div><div class="live-toolbar">${v?.options?.length?`<select id="scope" aria-label="Filter dashboard"><option value="all">All ${page==='command'?'sources':'venues'}</option>${v.options.map(o=>`<option value="${esc(o)}" ${scope===o?'selected':''}>${esc(o)}</option>`).join('')}</select>`:''}<button id="wall-mode">${document.body.classList.contains('wall-mode')?'Standard view':'Wallboard view'}</button></div></div>${v?`<div class="nexus-stage ${['map','campaigns'].includes(page)?'wide-stage':''}">${v.hero}<div class="nexus-panels">${v.body}</div></div>`:panel(error?'Data unavailable':'Loading HM data',`<div class="live-empty ${error?'load-error':''}" role="status">${esc(error||'Reading your authorized HM Operations data…')}</div>`)}</main><footer><span>HM / NEXUS</span><span>Read-only · Auto-refresh 30s · ${loadedAt?'Last fetched '+stamp(loadedAt)+' GST':'Awaiting data'}</span><a href="https://operations.hypermedia.ae/" target="_blank" rel="noopener">HM Operations</a></footer>`;
+ $('#refresh').onclick=refresh;$('#rotate').onclick=toggleRotate;$('#wall-mode').onclick=()=>{document.body.classList.toggle('wall-mode');render();};
  $('#fullscreen').onclick=()=>document.fullscreenElement?document.exitFullscreen():document.documentElement.requestFullscreen().catch(()=>{});
  if($('#scope'))$('#scope').onchange=e=>{scope=e.target.value;render();};
  if(retainedMap){document.querySelector('main .pagehead').after(retainedMap);drawMap(cache.mapData,cache.locations);mapInstance.resize();}
@@ -239,9 +162,8 @@ function drawMap(data,locations){
  if(mapView)mapInstance.setView(mapView.center,mapView.zoom);else fit();$('#fit-map').onclick=()=>{mapView=null;fit();};
 }
 function toggleRotate(){if(rotation){clearInterval(rotation);rotation=null;}else rotation=setInterval(()=>{location.hash=pages[(pages.findIndex(p=>p[0]===page)+1)%pages.length][0];},20000);render();}
-window.addEventListener('hashchange',()=>{const next=location.hash.slice(1);if(!pages.some(p=>p[0]===next)||next===page)return;page=next;scope='all';cache=null;loadedAt=null;error='';generation++;if(profile){render();refresh();}});
-client.auth.onAuthStateChange(event=>{if(event==='SIGNED_OUT'){authGeneration++;generation++;profile=null;cache=null;perms=[];if(mapInstance){mapInstance.remove();mapInstance=null;}mapView=null;clearInterval(rotation);rotation=null;authView();}});
-setInterval(()=>{if(profile)refresh();},30000);
-document.addEventListener('visibilitychange',()=>{if(!document.hidden&&profile)refresh();});
-authView();authenticate();
+window.addEventListener('hashchange',()=>{const next=location.hash.slice(1);if(!pages.some(p=>p[0]===next)||next===page)return;page=next;scope='all';cache=null;loadedAt=null;error='';generation++;render();refresh();});
+setInterval(refresh,30000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
+render();refresh();if(params.get('rotate')==='1')toggleRotate();
 })();
