@@ -36,7 +36,7 @@ window.HMMap3D={mount({points,view,container,token}){
   const unique=new Map();sites.forEach((g,i)=>{const venue=g[0].venue||g[0].name||String(i);if(!unique.has(venue))unique.set(venue,i);});const stops=[...unique.values()];let visits=0;
   const overview=()=>{
    const bounds=new mapboxgl.LngLatBounds([51.5,22.5],[56.5,26.2]);points.forEach(p=>bounds.extend([p.lng,p.lat]));
-   map.fitBounds(bounds,{padding:55,maxZoom:8,pitch:25,bearing:0,duration:2200});selectedKey=null;details.replaceChildren();const h=document.createElement('h3');h.textContent='United Arab Emirates · Network overview';const summary=document.createElement('p');summary.textContent=points.length+' mapped screens · '+points.filter(p=>p.state==='online').length+' online · '+points.filter(p=>p.state==='offline').length+' offline · Overview for 30 seconds, then venue close-ups';details.append(h,summary);visits=0;timer=setTimeout(venue,30000);
+   map.fitBounds(bounds,{padding:55,maxZoom:8,pitch:0,bearing:0,duration:2200});selectedKey=null;details.replaceChildren();const h=document.createElement('h3');h.textContent='United Arab Emirates · Network overview';const summary=document.createElement('p');summary.textContent=points.length+' mapped screens · '+points.filter(p=>p.state==='online').length+' online · '+points.filter(p=>p.state==='offline').length+' offline · Blinking locations · green online / red offline · 30-second overview, then venue close-ups';details.append(h,summary);visits=0;timer=setTimeout(venue,30000);
   };
   const venue=()=>{fly(stops[current++%stops.length]);visits++;timer=setTimeout(visits>=5?overview:venue,10000);};
   overview();
@@ -47,17 +47,17 @@ window.HMMap3D={mount({points,view,container,token}){
  map.on('load',()=>{
   const layers=map.getStyle().layers||[];const label=layers.find(l=>l.type==='symbol'&&l.layout?.['text-field']);
   if(map.getSource('composite'))map.addLayer({id:'hm-buildings',source:'composite','source-layer':'building',filter:['==','extrude','true'],type:'fill-extrusion',minzoom:14,paint:{'fill-extrusion-color':'#187987','fill-extrusion-height':['coalesce',['get','height'],0],'fill-extrusion-base':['coalesce',['get','min_height'],0],'fill-extrusion-opacity':0.62}},label?.id);
-  map.addSource('hm-sites',{type:'geojson',cluster:true,clusterMaxZoom:15,clusterRadius:42,clusterProperties:{screens:['+',['get','screens']],online:['+',['get','online']],offline:['+',['get','offline']],unknown:['+',['get','unknown']]},data:snapshot()});
-  map.addLayer({id:'hm-pulse',type:'circle',source:'hm-sites',paint:{'circle-color':statusColor,'circle-radius':15,'circle-opacity':0.18,'circle-blur':0.35}});
-  map.addLayer({id:'hm-clusters',type:'circle',source:'hm-sites',filter:['has','point_count'],paint:{'circle-color':statusColor,'circle-radius':['step',['get','point_count'],16,20,20,100,24],'circle-stroke-width':2,'circle-stroke-color':'#d9ffef','circle-opacity':0.95}});
-  map.addLayer({id:'hm-counts',type:'symbol',source:'hm-sites',filter:['has','point_count'],layout:{'text-field':['to-string',['get','screens']],'text-size':12},paint:{'text-color':'#07130e'}});
-  map.addLayer({id:'hm-cluster-status',type:'symbol',source:'hm-sites',filter:['has','point_count'],layout:{'text-field':['concat','ON ',['to-string',['get','online']],' / OFF ',['to-string',['get','offline']]],'text-size':10,'text-offset':[0,3],'text-anchor':'top'},paint:{'text-color':'#e1fdef','text-halo-color':'#09141e','text-halo-width':2}});
-  map.addLayer({id:'hm-screen-points',type:'circle',source:'hm-sites',filter:['!',['has','point_count']],paint:{'circle-radius':['interpolate',['linear'],['zoom'],6,4,15,6,19,8],'circle-color':statusColor,'circle-stroke-color':'#d9ffef','circle-stroke-width':1.5}});
-  if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches)pulseTimer=setInterval(()=>{if(document.hidden)return;const phase=(performance.now()%2000)/2000;map.setPaintProperty('hm-pulse','circle-radius',9+phase*17);map.setPaintProperty('hm-pulse','circle-opacity',0.3*(1-phase));},80);
+  // Keep every inventory coordinate visible at UAE scale; never collapse into regional bubbles.
+  map.addSource('hm-sites',{type:'geojson',data:snapshot()});
+  map.addLayer({id:'hm-pulse',type:'circle',source:'hm-sites',paint:{'circle-color':statusColor,'circle-radius':7,'circle-opacity':0.3,'circle-blur':0.2}});
+  map.addLayer({id:'hm-screen-points',type:'circle',source:'hm-sites',paint:{'circle-radius':4,'circle-color':'#9ba8b8','circle-opacity':0.75}});
+  map.addLayer({id:'hm-online',type:'circle',source:'hm-sites',filter:['>',['get','online'],0],paint:{'circle-radius':4,'circle-color':'#16ef9d','circle-stroke-color':'#baffdf','circle-stroke-width':0.6}});
+  // A red ring around a green dot means online and offline screens share this exact coordinate.
+  map.addLayer({id:'hm-offline',type:'circle',source:'hm-sites',filter:['>',['get','offline'],0],paint:{'circle-radius':['case',['>',['get','online'],0],6,4],'circle-color':'#ff3e58','circle-opacity':['case',['>',['get','online'],0],0,1],'circle-stroke-color':'#ff3e58','circle-stroke-width':1.5}});
+  if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches)pulseTimer=setInterval(()=>{if(document.hidden)return;const phase=(performance.now()%1600)/1600;map.setPaintProperty('hm-pulse','circle-radius',5+phase*7);map.setPaintProperty('hm-pulse','circle-opacity',0.5*(1-phase));const brightness=0.55+0.45*(0.5+0.5*Math.sin(phase*Math.PI*2));map.setPaintProperty('hm-online','circle-opacity',brightness);map.setPaintProperty('hm-offline','circle-stroke-opacity',brightness);},100);
   map.addLayer({id:'hm-venue-labels',type:'symbol',source:'hm-sites',minzoom:12,filter:['!',['has','point_count']],layout:{'text-field':['concat',['get','name'],' · ',['to-string',['get','screens']]],'text-size':12,'text-offset':[0,1.4],'text-anchor':'top','text-max-width':16},paint:{'text-color':'#b7fff2','text-halo-color':'#101923','text-halo-width':2}});
-  map.on('click','hm-clusters',e=>{stop();const f=e.features[0];map.getSource('hm-sites').getClusterExpansionZoom(f.properties.cluster_id,(error,zoom)=>{if(!error)map.easeTo({center:f.geometry.coordinates,zoom,pitch:55});});});
   map.on('click','hm-screen-points',e=>{stop();fly(Number(e.features[0].properties.index));});
-  for(const id of ['hm-clusters','hm-screen-points']){map.on('mouseenter',id,()=>map.getCanvas().style.cursor='pointer');map.on('mouseleave',id,()=>map.getCanvas().style.cursor='');}
+  map.on('mouseenter','hm-screen-points',()=>map.getCanvas().style.cursor='pointer');map.on('mouseleave','hm-screen-points',()=>map.getCanvas().style.cursor='');
   if(!view)fit();list();if(!window.matchMedia('(prefers-reduced-motion: reduce)').matches)startTour();
  });
  map.on('error',e=>{if(e.error?.status===401||e.error?.status===403){details.textContent='Mapbox access was denied. Check the public token and allowed URL restrictions.';}});
