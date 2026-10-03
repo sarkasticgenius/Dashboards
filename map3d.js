@@ -15,14 +15,15 @@ window.HMMap3D={mount({points,view,container,token}){
  const chime=()=>{if(!soundOn||!audio||audio.state!=='running'||document.hidden)return;const t=audio.currentTime;for(const [i,hz] of [523.25,659.25].entries()){const osc=audio.createOscillator(),gain=audio.createGain();osc.type='sine';osc.frequency.value=hz;gain.gain.setValueAtTime(0,t+i*.12);gain.gain.linearRampToValueAtTime(Number(volume.value)/100*.12,t+i*.12+.03);gain.gain.exponentialRampToValueAtTime(.0001,t+i*.12+.7);osc.connect(gain);gain.connect(audio.destination);osc.start(t+i*.12);osc.stop(t+i*.12+.75);}};
  tools.append(search,tilt,tour,sound,volume);root.before(tools);root.after(details);
  const groups=new Map();points.forEach(p=>{const key=p.lng+','+p.lat;if(!groups.has(key))groups.set(key,[]);groups.get(key).push(p);});
- let sites=[...groups.values()];let timer=null,current=0,pulseTimer=null,selectedKey=null;
+ let sites=[...groups.values()];let timer=null,current=0,pulseTimer=null,orbitTimer=null,selectedKey=null;
  const statusColor=['case',['>', ['get','offline'],0],'#ff3e58',['>', ['get','unknown'],0],'#9ba8b8','#16ef9d'];
  const snapshot=()=>({type:'FeatureCollection',features:sites.map((g,index)=>({type:'Feature',geometry:{type:'Point',coordinates:[g[0].lng,g[0].lat]},properties:{index,screens:g.length,online:g.filter(p=>p.state==='online').length,offline:g.filter(p=>p.state==='offline').length,unknown:g.filter(p=>p.state==='unknown').length,name:g[0].venue||g[0].name||'Screen location'}}))});
  const makeButton=(text,action)=>{const b=document.createElement('button');b.textContent=text;b.onclick=action;return b;};
- const map=new mapboxgl.Map({container,accessToken:token,style:'mapbox://styles/mapbox/dark-v11',center:view?.center||[55.25,25.1],zoom:view?.zoom||7,pitch:view?.pitch??55,bearing:view?.bearing??-18,antialias:true});
+ const map=new mapboxgl.Map({container,accessToken:token,style:'mapbox://styles/mapbox/dark-v11',center:view?.center||[55.25,25.1],zoom:view?.zoom||7,pitch:view?.pitch??55,bearing:view?.bearing??-18,antialias:true,attributionControl:false});
+ map.addControl(new mapboxgl.AttributionControl({compact:true}),'bottom-right');
  map.addControl(new mapboxgl.NavigationControl({visualizePitch:true}),'top-right');
  map.addControl(new mapboxgl.FullscreenControl(),'top-right');
- const stop=()=>{clearInterval(timer);timer=null;tour.textContent='Start venue tour';};
+ const stop=()=>{clearTimeout(timer);clearTimeout(orbitTimer);timer=null;orbitTimer=null;map.stop();tour.textContent='Start venue tour';};
  const describe=group=>{
   selectedKey=group[0].lng+','+group[0].lat;details.replaceChildren();const heading=document.createElement('h3');heading.textContent=[...new Set(group.map(p=>p.venue||'Unassigned venue'))].join(' / ');details.append(heading);
   const summary=document.createElement('p');summary.textContent=group.length+' screens at this inventory coordinate · '+group.filter(p=>p.state==='online').length+' online · '+group.filter(p=>p.state==='offline').length+' offline';details.append(summary);
@@ -36,7 +37,7 @@ window.HMMap3D={mount({points,view,container,token}){
   const unique=new Map();sites.forEach((g,i)=>{const venue=g[0].venue||g[0].name||String(i);if(!unique.has(venue))unique.set(venue,i);});const stops=[...unique.values()];let visits=0;
   const overview=()=>{
    const bounds=new mapboxgl.LngLatBounds([51.5,22.5],[56.5,26.2]);points.forEach(p=>bounds.extend([p.lng,p.lat]));
-   map.fitBounds(bounds,{padding:55,maxZoom:8,pitch:0,bearing:0,duration:2200});selectedKey=null;details.replaceChildren();const h=document.createElement('h3');h.textContent='United Arab Emirates · Network overview';const summary=document.createElement('p');summary.textContent=points.length+' mapped screens · '+points.filter(p=>p.state==='online').length+' online · '+points.filter(p=>p.state==='offline').length+' offline · Blinking locations · green online / red offline · 30-second overview, then venue close-ups';details.append(h,summary);visits=0;timer=setTimeout(venue,30000);
+   map.fitBounds(bounds,{padding:55,maxZoom:8,pitch:35,bearing:-25,duration:2200});selectedKey=null;details.replaceChildren();const h=document.createElement('h3');h.textContent='United Arab Emirates · Network overview';const summary=document.createElement('p');summary.textContent=points.length+' mapped screens · '+points.filter(p=>p.state==='online').length+' online · '+points.filter(p=>p.state==='offline').length+' offline · Blinking locations · green online / red offline · 30-second helicopter orbit, then venue close-ups';details.append(h,summary);visits=0;timer=setTimeout(venue,30000);
   };
   const venue=()=>{fly(stops[current++%stops.length]);visits++;timer=setTimeout(visits>=5?overview:venue,10000);};
   overview();
