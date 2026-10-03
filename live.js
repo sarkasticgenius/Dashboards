@@ -16,6 +16,8 @@ const stamp=x=>validDate(x)?new Date(x).toLocaleString('en-GB',{timeZone:'Asia/D
 const online=d=>validDate(d.last_seen)&&Date.now()-Date.parse(d.last_seen)<30*60000;
 const config=window.HM_CONFIG;
 if(!config){$('#app').textContent='Unable to load dashboard configuration. Please reload.';return;}
+// Kill switch: config.paused stops all data requests (no fetch, no polling) until it is set back to false.
+if(config.paused){$('#app').innerHTML='<main><h1>HM Nexus</h1><p>'+esc(config.pausedMessage||'Live data is temporarily paused.')+'</p></main>';return;}
 let page=location.hash.slice(1)||window.INITIAL_PAGE||'command';if(!pages.some(p=>p[0]===page))page='command';
 let profile=null,perms=[],factor=null,authBusy=false,cache=null,error='',scope='all',generation=0,fetching=false,rotation=null,loadedAt=null,authGeneration=0;
 let mapInstance=null,mapView=null;
